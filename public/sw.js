@@ -10,6 +10,7 @@ self.__scramjet$config = {
   codecs: "/scram/scramjet.codecs.js",
 };
 
+importScripts("/scram/scramjet.bundle.js");
 importScripts("/scram/scramjet.worker.js");
 
 const scramjet = new self.ScramjetServiceWorker();
