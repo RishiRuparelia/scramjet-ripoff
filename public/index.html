@@ -206,7 +206,8 @@
     function navigate() {
       const target = normalize(input.value);
       if (!target) return;
-      const encoded = self.__scramjet$bundle.rewriters.url.encodeUrl(target);
+      const cfg = self.__scramjet$config;
+      const encoded = location.origin + cfg.prefix + cfg.codec.encode(new URL(target).href);
       log(`nav → ${encoded}`, "dim");
       setStatus("Loading " + target);
       frame.src = encoded;
