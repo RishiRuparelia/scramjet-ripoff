@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Scramjet Ripoff</title>
+  <link rel="icon" href="data:," />
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; display: flex; flex-direction: column; height: 100vh; }
+    header { display: flex; gap: 0.5rem; padding: 0.75rem 1rem; background: #1a1d24; border-bottom: 1px solid #2a2f3a; }
+    input { flex: 1; padding: 0.55rem 0.8rem; border-radius: 0.5rem; border: 1px solid #2a2f3a; background: #0f1115; color: inherit; font-size: 1rem; outline: none; }
+    input:focus { border-color: #3b82f6; }
+    button { padding: 0.55rem 1.1rem; border-radius: 0.5rem; border: 0; background: #3b82f6; color: white; font-weight: 600; font-size: 0.95rem; cursor: pointer; }
+    button:hover { background: #2563eb; }
+    button:disabled { background: #374151; cursor: not-allowed; }
+    #status { font-size: 0.8rem; color: #9ca3af; padding: 0.4rem 1rem; background: #11141a; border-bottom: 1px solid #2a2f3a; }
+    #status.error { color: #f87171; }
+    iframe { flex: 1; width: 100%; border: 0; background: white; }
+  </style>
+</head>
+<body>
+  <header>
+    <input id="url" type="text" placeholder="Enter a URL or search term" autocomplete="off" spellcheck="false" disabled />
+    <button id="go" disabled>Go</button>
+  </header>
+  <div id="status">Booting proxy…</div>
+  <iframe id="frame" title="proxied content"></iframe>
+
+  <!-- Scramjet: codec, then config override, then the rewriter bundle -->
+  <script src="/scram/scramjet.codecs.js"></script>
+  <script>
+    self.__scramjet$config = {
+      prefix: "/scramjet/",
+      codec: self.__scramjet$codecs.plain,
+      config: "/scram/scramjet.config.js",
+      bundle: "/scram/scramjet.bundle.js",
+      worker: "/scram/scramjet.worker.js",
+      client: "/scram/scramjet.client.js",
+      codecs: "/scram/scramjet.codecs.js",
+    };
+  </script>
+  <script src="/scram/scramjet.bundle.js"></script>
+  <!-- Epoxy (UMD) exposes window.EpxMod.EpoxyClient -->
+  <script src="/epoxy/index.js"></script>
+
+  <script type="module">
+    const statusEl = document.getElementById("status");
+    const frame = document.getElementById("frame");
+    const input = document.getElementById("url");
+    const go = document.getElementById("go");
+
+    const setStatus = (msg, err = false) => {
+      statusEl.textContent = msg;
+      statusEl.classList.toggle("error", err);
+    };
+
+    const normalize = (raw) => {
+      raw = raw.trim();
+      if (!raw) return null;
+      try { return new URL(raw).toString(); } catch {}
+      if (/^[^\s]+\.[^\s]+$/.test(raw)) return "https://" + raw;
+      return "https://duckduckgo.com/?q=" + encodeURIComponent(raw);
+    };
+
+    async function boot() {
+      if (!("serviceWorker" in navigator)) {
+        throw new Error("service workers not supported");
+      }
+
+      const wispUrl =
+        (location.protocol === "https:" ? "wss" : "ws") + "://" + location.host + "/wisp/";
+      const epoxy = new EpxMod.EpoxyClient({ wisp: wispUrl });
+      await epoxy.init();
+
+      await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+      await navigator.serviceWorker.ready;
+
+      // Tell Scramjet's SW-side bare-mux switcher to use a RemoteTransport.
+      // The SW will forward each proxied request back to us, and we run it
+      // through the locally-initialized Epoxy client.
+      const channel = new BroadcastChannel("bare-mux");
+      const setMessage = { type: "setremote", data: { name: "proxy" } };
+      channel.addEventListener("message", (ev) => {
+        if (ev.data?.type === "find") channel.postMessage(setMessage);
+      });
+      channel.postMessage(setMessage);
+
+      navigator.serviceWorker.addEventListener("message", async (event) => {
+        const data = event.data;
+        if (!data || data.type !== "request") return;
+        const reply = event.source ?? navigator.serviceWorker.controller;
+        if (!reply) return;
+        try {
+          const res = await epoxy.request(
+            new URL(data.remote),
+            data.method,
+            data.body,
+            data.headers,
+            undefined,
+          );
+          const transfer = [];
+          if (
+            res.body instanceof ArrayBuffer ||
+            res.body instanceof Blob ||
+            res.body instanceof ReadableStream
+          ) transfer.push(res.body);
+          reply.postMessage({ ...res, id: data.id, type: "response" }, transfer);
+        } catch (err) {
+          reply.postMessage({ id: data.id, type: "error", error: String(err?.message ?? err) });
+        }
+      });
+
+      input.disabled = false;
+      go.disabled = false;
+      setStatus("Ready. Type a URL and press Go.");
+      input.focus();
+    }
+
+    function navigate() {
+      const target = normalize(input.value);
+      if (!target) return;
+      setStatus("Loading " + target);
+      frame.src = self.__scramjet$bundle.rewriters.url.encodeUrl(target);
+    }
+
+    go.addEventListener("click", navigate);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") navigate(); });
+
+    boot().catch((err) => {
+      console.error(err);
+      setStatus("Failed to boot proxy: " + (err?.message ?? err), true);
+    });
+  </script>
+</body>
+</html>

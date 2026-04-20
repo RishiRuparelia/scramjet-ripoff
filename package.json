@@ -1,0 +1,15 @@
+{
+  "name": "scramjet-ripoff",
+  "version": "0.1.0",
+  "description": "A minimal web proxy built on top of Scramjet.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@mercuryworkshop/bare-mux": "~1.1.4",
+    "@mercuryworkshop/epoxy-transport": "~1.1.0",
+    "@mercuryworkshop/scramjet": "^1.0.2",
+    "@mercuryworkshop/wisp-js": "^0.4.1"
+  }
+}
