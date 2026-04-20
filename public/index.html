@@ -171,7 +171,7 @@
         }
         const reply = event.source ?? navigator.serviceWorker.controller;
         if (!reply) { log("no reply channel for SW request", "err"); return; }
-        log(`proxy ${data.method} ${data.remote}`, "dim");
+        const started = performance.now();
         try {
           const res = await epoxy.request(
             new URL(data.remote),
@@ -180,13 +180,16 @@
             data.headers,
             undefined,
           );
+          const ms = (performance.now() - started).toFixed(0);
+          log(`${res.status} ${data.method} ${data.remote} (${ms}ms)`, res.status < 400 ? "dim" : "err");
           const transfer = [];
           if (res.body instanceof ArrayBuffer || res.body instanceof Blob || res.body instanceof ReadableStream) {
             transfer.push(res.body);
           }
           reply.postMessage({ ...res, id: data.id, type: "response" }, transfer);
         } catch (err) {
-          log(`proxy error ${data.remote}: ${err?.message ?? err}`, "err");
+          const ms = (performance.now() - started).toFixed(0);
+          log(`FAIL ${data.method} ${data.remote} after ${ms}ms: ${err?.message ?? err}`, "err");
           reply.postMessage({ id: data.id, type: "error", error: String(err?.message ?? err) });
         }
       });
