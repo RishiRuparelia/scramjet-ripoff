@@ -15,8 +15,19 @@
     button { padding: 0.55rem 1.1rem; border-radius: 0.5rem; border: 0; background: #3b82f6; color: white; font-weight: 600; font-size: 0.95rem; cursor: pointer; }
     button:hover { background: #2563eb; }
     button:disabled { background: #374151; cursor: not-allowed; }
-    #status { font-size: 0.8rem; color: #9ca3af; padding: 0.4rem 1rem; background: #11141a; border-bottom: 1px solid #2a2f3a; }
-    #status.error { color: #f87171; }
+    button.ghost { background: #2a2f3a; }
+    button.ghost:hover { background: #3a4050; }
+    #status { font-size: 0.8rem; color: #9ca3af; padding: 0.4rem 1rem; background: #11141a; border-bottom: 1px solid #2a2f3a; display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
+    #status .msg { flex: 1; }
+    #status.error .msg { color: #f87171; }
+    #status.ok .msg { color: #34d399; }
+    #toggleLog { font-size: 0.75rem; padding: 0.2rem 0.5rem; background: transparent; border: 1px solid #2a2f3a; color: #9ca3af; border-radius: 0.3rem; cursor: pointer; }
+    #toggleLog:hover { color: #e6e6e6; }
+    #log { display: none; font-family: ui-monospace, Menlo, monospace; font-size: 0.72rem; color: #cbd5e1; background: #0a0c10; border-bottom: 1px solid #2a2f3a; max-height: 40vh; overflow: auto; padding: 0.4rem 1rem; white-space: pre-wrap; word-break: break-all; }
+    #log.show { display: block; }
+    #log .err { color: #f87171; }
+    #log .ok { color: #34d399; }
+    #log .dim { color: #6b7280; }
     iframe { flex: 1; width: 100%; border: 0; background: white; }
   </style>
 </head>
@@ -24,11 +35,15 @@
   <header>
     <input id="url" type="text" placeholder="Enter a URL or search term" autocomplete="off" spellcheck="false" disabled />
     <button id="go" disabled>Go</button>
+    <button id="reset" class="ghost" title="Unregister the service worker and reload">Reset</button>
   </header>
-  <div id="status">Booting proxy…</div>
+  <div id="status">
+    <span class="msg">Booting proxy…</span>
+    <button id="toggleLog">Show log</button>
+  </div>
+  <div id="log"></div>
   <iframe id="frame" title="proxied content"></iframe>
 
-  <!-- Scramjet: codec, then config override, then the rewriter bundle -->
   <script src="/scram/scramjet.codecs.js"></script>
   <script>
     self.__scramjet$config = {
@@ -42,19 +57,48 @@
     };
   </script>
   <script src="/scram/scramjet.bundle.js"></script>
-  <!-- Epoxy (UMD) exposes window.EpxMod.EpoxyClient -->
   <script src="/epoxy/index.js"></script>
 
   <script type="module">
     const statusEl = document.getElementById("status");
+    const statusMsg = statusEl.querySelector(".msg");
+    const logEl = document.getElementById("log");
+    const toggleLog = document.getElementById("toggleLog");
     const frame = document.getElementById("frame");
     const input = document.getElementById("url");
     const go = document.getElementById("go");
+    const resetBtn = document.getElementById("reset");
 
-    const setStatus = (msg, err = false) => {
-      statusEl.textContent = msg;
-      statusEl.classList.toggle("error", err);
+    const setStatus = (msg, kind = "") => {
+      statusMsg.textContent = msg;
+      statusEl.classList.remove("error", "ok");
+      if (kind) statusEl.classList.add(kind);
     };
+
+    const log = (msg, cls = "") => {
+      const t = new Date().toTimeString().slice(0, 8);
+      const line = document.createElement("div");
+      if (cls) line.className = cls;
+      line.textContent = `[${t}] ${msg}`;
+      logEl.appendChild(line);
+      logEl.scrollTop = logEl.scrollHeight;
+    };
+
+    toggleLog.addEventListener("click", () => {
+      const shown = logEl.classList.toggle("show");
+      toggleLog.textContent = shown ? "Hide log" : "Show log";
+    });
+
+    resetBtn.addEventListener("click", async () => {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      for (const r of regs) await r.unregister();
+      location.reload();
+    });
+
+    window.addEventListener("error", (ev) => log(`window error: ${ev.message}`, "err"));
+    window.addEventListener("unhandledrejection", (ev) =>
+      log(`unhandled rejection: ${ev.reason?.message ?? ev.reason}`, "err"),
+    );
 
     const normalize = (raw) => {
       raw = raw.trim();
@@ -65,33 +109,69 @@
     };
 
     async function boot() {
-      if (!("serviceWorker" in navigator)) {
-        throw new Error("service workers not supported");
+      if (!("serviceWorker" in navigator)) throw new Error("service workers not supported");
+      log(`location: ${location.href}`, "dim");
+      log(`secure context: ${window.isSecureContext}`, "dim");
+
+      if (typeof self.__scramjet$bundle !== "object") {
+        throw new Error("scramjet bundle failed to load (__scramjet$bundle missing)");
+      }
+      if (typeof EpxMod !== "object" || !EpxMod.EpoxyClient) {
+        throw new Error("epoxy-transport failed to load (EpxMod.EpoxyClient missing)");
+      }
+      log("scramjet bundle + epoxy module loaded", "ok");
+
+      const wispUrl = (location.protocol === "https:" ? "wss" : "ws") + "://" + location.host + "/wisp/";
+      log(`wisp url: ${wispUrl}`, "dim");
+
+      const epoxy = new EpxMod.EpoxyClient({ wisp: wispUrl });
+      setStatus("Initializing epoxy (loading WASM)…");
+      await epoxy.init();
+      log("epoxy initialized", "ok");
+
+      setStatus("Running self-test request to https://example.com …");
+      try {
+        const res = await epoxy.request(
+          new URL("https://example.com/"),
+          "GET",
+          null,
+          {},
+          undefined,
+        );
+        log(`self-test → HTTP ${res.status} ${res.statusText}`, "ok");
+      } catch (err) {
+        log(`self-test failed: ${err?.message ?? err}`, "err");
+        throw new Error("epoxy request failed — wisp tunnel is not working");
       }
 
-      const wispUrl =
-        (location.protocol === "https:" ? "wss" : "ws") + "://" + location.host + "/wisp/";
-      const epoxy = new EpxMod.EpoxyClient({ wisp: wispUrl });
-      await epoxy.init();
-
-      await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+      setStatus("Registering service worker…");
+      const reg = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+      log(`SW registered, scope: ${reg.scope}`, "ok");
       await navigator.serviceWorker.ready;
+      log(`SW ready (controller: ${!!navigator.serviceWorker.controller})`, "ok");
 
       // Tell Scramjet's SW-side bare-mux switcher to use a RemoteTransport.
-      // The SW will forward each proxied request back to us, and we run it
-      // through the locally-initialized Epoxy client.
       const channel = new BroadcastChannel("bare-mux");
       const setMessage = { type: "setremote", data: { name: "proxy" } };
       channel.addEventListener("message", (ev) => {
-        if (ev.data?.type === "find") channel.postMessage(setMessage);
+        if (ev.data?.type === "find") {
+          channel.postMessage(setMessage);
+          log("bare-mux: responded to find", "dim");
+        }
       });
       channel.postMessage(setMessage);
+      log("bare-mux: broadcasted setremote", "ok");
 
       navigator.serviceWorker.addEventListener("message", async (event) => {
         const data = event.data;
-        if (!data || data.type !== "request") return;
+        if (!data) return;
+        if (data.type !== "request") {
+          if (typeof data === "string" || data.type) log(`sw msg: ${JSON.stringify(data).slice(0, 200)}`, "dim");
+          return;
+        }
         const reply = event.source ?? navigator.serviceWorker.controller;
-        if (!reply) return;
+        if (!reply) { log("no reply channel for SW request", "err"); return; }
+        log(`proxy ${data.method} ${data.remote}`, "dim");
         try {
           const res = await epoxy.request(
             new URL(data.remote),
@@ -101,36 +181,45 @@
             undefined,
           );
           const transfer = [];
-          if (
-            res.body instanceof ArrayBuffer ||
-            res.body instanceof Blob ||
-            res.body instanceof ReadableStream
-          ) transfer.push(res.body);
+          if (res.body instanceof ArrayBuffer || res.body instanceof Blob || res.body instanceof ReadableStream) {
+            transfer.push(res.body);
+          }
           reply.postMessage({ ...res, id: data.id, type: "response" }, transfer);
         } catch (err) {
+          log(`proxy error ${data.remote}: ${err?.message ?? err}`, "err");
           reply.postMessage({ id: data.id, type: "error", error: String(err?.message ?? err) });
         }
       });
 
+      if (!navigator.serviceWorker.controller) {
+        log("page has no SW controller yet — reloading to take control", "dim");
+        location.reload();
+        return;
+      }
+
       input.disabled = false;
       go.disabled = false;
-      setStatus("Ready. Type a URL and press Go.");
+      setStatus("Ready. Type a URL and press Go.", "ok");
       input.focus();
     }
 
     function navigate() {
       const target = normalize(input.value);
       if (!target) return;
+      const encoded = self.__scramjet$bundle.rewriters.url.encodeUrl(target);
+      log(`nav → ${encoded}`, "dim");
       setStatus("Loading " + target);
-      frame.src = self.__scramjet$bundle.rewriters.url.encodeUrl(target);
+      frame.src = encoded;
     }
 
     go.addEventListener("click", navigate);
     input.addEventListener("keydown", (e) => { if (e.key === "Enter") navigate(); });
 
     boot().catch((err) => {
-      console.error(err);
-      setStatus("Failed to boot proxy: " + (err?.message ?? err), true);
+      log(`boot failed: ${err?.message ?? err}`, "err");
+      setStatus("Boot failed — click “Show log” for details.", "error");
+      logEl.classList.add("show");
+      toggleLog.textContent = "Hide log";
     });
   </script>
 </body>
