@@ -44,20 +44,8 @@
   <div id="log"></div>
   <iframe id="frame" title="proxied content"></iframe>
 
-  <script src="/scram/scramjet.codecs.js"></script>
-  <script>
-    self.__scramjet$config = {
-      prefix: "/scramjet/",
-      codec: self.__scramjet$codecs.plain,
-      config: "/scram/scramjet.config.js",
-      bundle: "/scram/scramjet.bundle.js",
-      worker: "/scram/scramjet.worker.js",
-      client: "/scram/scramjet.client.js",
-      codecs: "/scram/scramjet.codecs.js",
-    };
-  </script>
-  <script src="/scram/scramjet.bundle.js"></script>
-  <script src="/epoxy/index.js"></script>
+  <script src="/scram/scramjet.all.js"></script>
+  <script src="/bm/index.js"></script>
 
   <script type="module">
     const statusEl = document.getElementById("status");
@@ -108,41 +96,61 @@
       return "https://duckduckgo.com/?q=" + encodeURIComponent(raw);
     };
 
+    const scramjetConfig = {
+      prefix: "/scramjet/",
+      files: {
+        wasm: "/scram/scramjet.wasm.wasm",
+        all: "/scram/scramjet.all.js",
+        sync: "/scram/scramjet.sync.js",
+      },
+      flags: {
+        serviceworkers: true,
+        syncxhr: true,
+        strictRewrites: false,
+        rewriterLogs: false,
+        captureErrors: true,
+        cleanErrors: true,
+        scramitize: true,
+        sourcemaps: false,
+        destructureRewrites: true,
+        interceptDownloads: true,
+        allowInvalidJs: true,
+        allowFailedIntercepts: true,
+      },
+      siteFlags: {
+        "https://(www\\.)?tiktok\\.com/.*": {
+          scramitize: true,
+          destructureRewrites: true,
+          allowInvalidJs: true,
+        },
+      },
+      codec: {
+        encode: (url) => encodeURIComponent(url),
+        decode: (url) => decodeURIComponent(url),
+      },
+    };
+
     async function boot() {
       if (!("serviceWorker" in navigator)) throw new Error("service workers not supported");
       log(`location: ${location.href}`, "dim");
       log(`secure context: ${window.isSecureContext}`, "dim");
 
-      if (typeof self.__scramjet$bundle !== "object") {
-        throw new Error("scramjet bundle failed to load (__scramjet$bundle missing)");
+      if (typeof self.$scramjetLoadController !== "function") {
+        throw new Error("scramjet.all.js failed to load ($scramjetLoadController missing)");
       }
-      if (typeof EpxMod !== "object" || !EpxMod.EpoxyClient) {
-        throw new Error("epoxy-transport failed to load (EpxMod.EpoxyClient missing)");
+      if (typeof self.BareMux?.BareMuxConnection !== "function") {
+        throw new Error("bare-mux failed to load (BareMux.BareMuxConnection missing)");
       }
-      log("scramjet bundle + epoxy module loaded", "ok");
+      log("scramjet + bare-mux loaded", "ok");
+
+      const { ScramjetController } = $scramjetLoadController();
+      const scramjet = new ScramjetController(scramjetConfig);
+      setStatus("Initializing scramjet (loading WASM)…");
+      await scramjet.init();
+      log("scramjet controller initialized", "ok");
 
       const wispUrl = (location.protocol === "https:" ? "wss" : "ws") + "://" + location.host + "/wisp/";
       log(`wisp url: ${wispUrl}`, "dim");
-
-      const epoxy = new EpxMod.EpoxyClient({ wisp: wispUrl });
-      setStatus("Initializing epoxy (loading WASM)…");
-      await epoxy.init();
-      log("epoxy initialized", "ok");
-
-      setStatus("Running self-test request to https://example.com …");
-      try {
-        const res = await epoxy.request(
-          new URL("https://example.com/"),
-          "GET",
-          null,
-          {},
-          undefined,
-        );
-        log(`self-test → HTTP ${res.status} ${res.statusText}`, "ok");
-      } catch (err) {
-        log(`self-test failed: ${err?.message ?? err}`, "err");
-        throw new Error("epoxy request failed — wisp tunnel is not working");
-      }
 
       setStatus("Registering service worker…");
       const reg = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
@@ -150,49 +158,24 @@
       await navigator.serviceWorker.ready;
       log(`SW ready (controller: ${!!navigator.serviceWorker.controller})`, "ok");
 
-      // Tell Scramjet's SW-side bare-mux switcher to use a RemoteTransport.
-      const channel = new BroadcastChannel("bare-mux");
-      const setMessage = { type: "setremote", data: { name: "proxy" } };
-      channel.addEventListener("message", (ev) => {
-        if (ev.data?.type === "find") {
-          channel.postMessage(setMessage);
-          log("bare-mux: responded to find", "dim");
-        }
-      });
-      channel.postMessage(setMessage);
-      log("bare-mux: broadcasted setremote", "ok");
+      setStatus("Wiring bare-mux transport…");
+      const conn = new BareMux.BareMuxConnection("/bm/worker.js");
+      const current = await conn.getTransport();
+      if (current !== "/lc/index.mjs") {
+        await conn.setTransport("/lc/index.mjs", [{ wisp: wispUrl }]);
+        log("bare-mux: set libcurl transport", "ok");
+      } else {
+        log("bare-mux: libcurl transport already active", "dim");
+      }
 
-      navigator.serviceWorker.addEventListener("message", async (event) => {
-        const data = event.data;
-        if (!data) return;
-        if (data.type !== "request") {
-          if (typeof data === "string" || data.type) log(`sw msg: ${JSON.stringify(data).slice(0, 200)}`, "dim");
-          return;
-        }
-        const reply = event.source ?? navigator.serviceWorker.controller;
-        if (!reply) { log("no reply channel for SW request", "err"); return; }
-        const started = performance.now();
-        try {
-          const res = await epoxy.request(
-            new URL(data.remote),
-            data.method,
-            data.body,
-            data.headers,
-            undefined,
-          );
-          const ms = (performance.now() - started).toFixed(0);
-          log(`${res.status} ${data.method} ${data.remote} (${ms}ms)`, res.status < 400 ? "dim" : "err");
-          const transfer = [];
-          if (res.body instanceof ArrayBuffer || res.body instanceof Blob || res.body instanceof ReadableStream) {
-            transfer.push(res.body);
-          }
-          reply.postMessage({ ...res, id: data.id, type: "response" }, transfer);
-        } catch (err) {
-          const ms = (performance.now() - started).toFixed(0);
-          log(`FAIL ${data.method} ${data.remote} after ${ms}ms: ${err?.message ?? err}`, "err");
-          reply.postMessage({ id: data.id, type: "error", error: String(err?.message ?? err) });
-        }
-      });
+      setStatus("Running self-test request to https://example.com …");
+      try {
+        const client = new BareMux.BareClient("/bm/worker.js");
+        const res = await client.fetch("https://example.com/");
+        log(`self-test → HTTP ${res.status} ${res.statusText}`, "ok");
+      } catch (err) {
+        log(`self-test failed: ${err?.message ?? err}`, "err");
+      }
 
       if (!navigator.serviceWorker.controller) {
         log("page has no SW controller yet — reloading to take control", "dim");
@@ -200,6 +183,7 @@
         return;
       }
 
+      window.__scramjet = scramjet;
       input.disabled = false;
       go.disabled = false;
       setStatus("Ready. Type a URL and press Go.", "ok");
@@ -209,8 +193,7 @@
     function navigate() {
       const target = normalize(input.value);
       if (!target) return;
-      const cfg = self.__scramjet$config;
-      const encoded = location.origin + cfg.prefix + cfg.codec.encode(new URL(target).href);
+      const encoded = window.__scramjet.encodeUrl(target);
       log(`nav → ${encoded}`, "dim");
       setStatus("Loading " + target);
       frame.src = encoded;

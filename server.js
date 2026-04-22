@@ -10,7 +10,8 @@ const modules = join(__dirname, "node_modules");
 
 const staticRoutes = [
   { prefix: "/scram/", dir: join(modules, "@mercuryworkshop", "scramjet", "dist") },
-  { prefix: "/epoxy/", dir: join(modules, "@mercuryworkshop", "epoxy-transport", "dist") },
+  { prefix: "/bm/", dir: join(modules, "@mercuryworkshop", "bare-mux", "dist") },
+  { prefix: "/lc/", dir: join(modules, "@mercuryworkshop", "libcurl-transport", "dist") },
 ];
 
 const mime = {
@@ -32,6 +33,9 @@ async function tryServe(absPath, res) {
     res.writeHead(200, {
       "Content-Type": mime[extname(absPath)] ?? "application/octet-stream",
       "Cache-Control": "no-cache",
+      "Cross-Origin-Embedder-Policy": "require-corp",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Cross-Origin-Resource-Policy": "same-site",
     });
     res.end(data);
     return true;

@@ -1,25 +1,17 @@
-importScripts("/scram/scramjet.codecs.js");
+importScripts("/scram/scramjet.all.js");
 
-self.__scramjet$config = {
-  prefix: "/scramjet/",
-  codec: self.__scramjet$codecs.plain,
-  config: "/scram/scramjet.config.js",
-  bundle: "/scram/scramjet.bundle.js",
-  worker: "/scram/scramjet.worker.js",
-  client: "/scram/scramjet.client.js",
-  codecs: "/scram/scramjet.codecs.js",
-};
-
-importScripts("/scram/scramjet.bundle.js");
-importScripts("/scram/scramjet.worker.js");
-
-const scramjet = new self.ScramjetServiceWorker();
+const { ScramjetServiceWorker } = $scramjetLoadWorker();
+const scramjet = new ScramjetServiceWorker();
 
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
 
 self.addEventListener("fetch", (event) => {
-  if (scramjet.route(event)) {
-    event.respondWith(scramjet.fetch(event));
-  }
+  event.respondWith(
+    (async () => {
+      await scramjet.loadConfig();
+      if (scramjet.route(event)) return scramjet.fetch(event);
+      return fetch(event.request);
+    })(),
+  );
 });
