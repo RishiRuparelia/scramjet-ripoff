@@ -88,6 +88,12 @@
       log(`unhandled rejection: ${ev.reason?.message ?? ev.reason}`, "err"),
     );
 
+    navigator.serviceWorker?.addEventListener("message", (ev) => {
+      if (ev.data?.type === "sw-log") {
+        log(`SW: ${ev.data.msg}`, ev.data.level === "err" ? "err" : "dim");
+      }
+    });
+
     const normalize = (raw) => {
       raw = raw.trim();
       if (!raw) return null;
