@@ -13,22 +13,15 @@ self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim(
 
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
-  const interesting = url.pathname.startsWith("/scramjet/") || event.request.mode === "navigate";
   event.respondWith(
     (async () => {
       try {
         await scramjet.loadConfig();
-        const routed = scramjet.route(event);
-        if (interesting) {
-          broadcast({ level: "dim", msg: `fetch ${event.request.mode} ${url.pathname.slice(0, 80)} → route=${routed}` });
-        }
-        if (routed) {
+        if (scramjet.route(event)) {
           try {
-            const res = await scramjet.fetch(event);
-            if (interesting) broadcast({ level: "dim", msg: `→ ${res.status} ${url.pathname.slice(0, 80)}` });
-            return res;
+            return await scramjet.fetch(event);
           } catch (err) {
-            broadcast({ level: "err", msg: `scramjet.fetch threw for ${url.pathname}: ${err?.message ?? err}` });
+            broadcast({ level: "err", msg: `scramjet.fetch threw for ${url.pathname.slice(0, 120)}: ${err?.message ?? err}` });
             return new Response(`scramjet.fetch threw: ${err?.message ?? err}`, {
               status: 500,
               headers: { "Content-Type": "text/plain; charset=utf-8" },
@@ -37,7 +30,7 @@ self.addEventListener("fetch", (event) => {
         }
         return fetch(event.request);
       } catch (err) {
-        broadcast({ level: "err", msg: `SW outer threw for ${url.pathname}: ${err?.message ?? err}` });
+        broadcast({ level: "err", msg: `SW outer threw for ${url.pathname.slice(0, 120)}: ${err?.message ?? err}` });
         return new Response(`SW outer threw: ${err?.message ?? err}`, {
           status: 500,
           headers: { "Content-Type": "text/plain; charset=utf-8" },
