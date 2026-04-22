@@ -33,9 +33,6 @@ async function tryServe(absPath, res) {
     res.writeHead(200, {
       "Content-Type": mime[extname(absPath)] ?? "application/octet-stream",
       "Cache-Control": "no-cache",
-      "Cross-Origin-Embedder-Policy": "require-corp",
-      "Cross-Origin-Opener-Policy": "same-origin",
-      "Cross-Origin-Resource-Policy": "same-site",
     });
     res.end(data);
     return true;
