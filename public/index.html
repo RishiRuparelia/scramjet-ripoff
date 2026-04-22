@@ -168,14 +168,23 @@
         log("bare-mux: libcurl transport already active", "dim");
       }
 
-      setStatus("Running self-test request to https://example.com …");
-      try {
-        const client = new BareMux.BareClient("/bm/worker.js");
-        const res = await client.fetch("https://example.com/");
-        log(`self-test → HTTP ${res.status} ${res.statusText}`, "ok");
-      } catch (err) {
-        log(`self-test failed: ${err?.message ?? err}`, "err");
+      setStatus("Warming up libcurl transport…");
+      const client = new BareMux.BareClient("/bm/worker.js");
+      let warmed = false;
+      for (let attempt = 1; attempt <= 8; attempt++) {
+        try {
+          const res = await client.fetch("https://example.com/");
+          log(`warmup #${attempt} → HTTP ${res.status}`, "ok");
+          warmed = true;
+          break;
+        } catch (err) {
+          const msg = err?.message ?? String(err);
+          log(`warmup #${attempt} failed: ${msg}`, "dim");
+          if (!/wasm not loaded/i.test(msg) && attempt > 2) throw err;
+          await new Promise((r) => setTimeout(r, 500));
+        }
       }
+      if (!warmed) throw new Error("transport never became ready");
 
       if (!navigator.serviceWorker.controller) {
         log("page has no SW controller yet — reloading to take control", "dim");
