@@ -3,13 +3,16 @@
   "version": "0.1.0",
   "description": "A minimal web proxy built on top of Scramjet.",
   "type": "module",
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
     "@mercuryworkshop/bare-mux": "^2.1.8",
     "@mercuryworkshop/libcurl-transport": "^1.5.2",
-    "@mercuryworkshop/scramjet": "https://github.com/MercuryWorkshop/scramjet/releases/download/latest/mercuryworkshop-scramjet-2.0.0-alpha.tgz",
+    "@mercuryworkshop/scramjet": "^1.1.0",
     "@mercuryworkshop/wisp-js": "^0.4.1"
   }
 }
